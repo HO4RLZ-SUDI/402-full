@@ -13,40 +13,36 @@ app = Flask(__name__)
 app.secret_key = "m42_v2_secure_key"
 MY_PROMPTPAY_ID = "0627798207" # เบอร์พร้อมเพย์ของคุณ
 
-# 1. เชื่อมต่อ Firebase
-# ตรวจสอบว่าไฟล์กุญแจวางอยู่ถูกที่หรือไม่
-cred_path = "serviceAccountKey.json"
-if not os.path.exists(cred_path):
-    print(f"❌ ไม่พบไฟล์ {cred_path}! กรุณานำไฟล์กุญแจจาก Firebase มาวาง")
-else:
-    cred = credentials.Certificate(cred_path)
-    firebase_admin.initialize_app(cred)
-    db = firestore.client()
-
-# ตรวจสอบว่าอยู่บน Render หรือไม่ (ถ้ามี Env ชื่อ FIREBASE_CONFIG)
-if os.environ.get('FIREBASE_CONFIG'):
-    firebase_raw = os.environ.get('FIREBASE_CONFIG')
-    cred_dict = json.loads(firebase_raw)
-    cred = credentials.Certificate(cred_dict)
-    firebase_admin.initialize_app(cred)
-else:
-    # ถ้าอยู่ในคอมตัวเอง ให้ใช้ไฟล์ตามเดิม
-    cred = credentials.Certificate("serviceAccountKey.json")
-    firebase_admin.initialize_app(cred)
+# 1. เชื่อมต่อ Firebase (แบบป้องกันการเรียกซ้ำ)
+if not firebase_admin._apps:
+    # ตรวจสอบ Environment Variable ก่อน (สำหรับ Render)
+    if os.environ.get('FIREBASE_CONFIG'):
+        try:
+            cred_dict = json.loads(os.environ.get('FIREBASE_CONFIG'))
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            print("✅ Connected to Firebase via Environment Variable")
+        except Exception as e:
+            print(f"❌ Error loading FIREBASE_CONFIG: {e}")
+    # ถ้าไม่มี Env ให้เช็คจากไฟล์ (สำหรับรันในคอมตัวเอง)
+    elif os.path.exists("serviceAccountKey.json"):
+        cred = credentials.Certificate("serviceAccountKey.json")
+        firebase_admin.initialize_app(cred)
+        print("✅ Connected to Firebase via serviceAccountKey.json")
+    else:
+        print("❌ ไม่พบการตั้งค่า Firebase! กรุณาเช็ค Environment Variable หรือไฟล์ serviceAccountKey.json")
 
 db = firestore.client()
 
-# โหลด AI Reader (อาจใช้เวลาซักครู่)
+# โหลด AI Reader
 print("⌛ กำลังโหลด AI Reader...")
 reader = easyocr.Reader(['th', 'en'], gpu=False)
 
-# ฟังก์ชันเตรียมข้อมูลเริ่มต้นใน Firebase (รันครั้งแรกครั้งเดียว)
+# ฟังก์ชันเตรียมข้อมูลเริ่มต้นใน Firebase
 def init_firebase():
     students_ref = db.collection('students')
-    # เช็คว่ามีข้อมูลหรือยัง
     if not students_ref.limit(1).get():
         print("🚀 กำลังสร้างรายชื่อนักเรียน 29 คนใน Firebase...")
-        # สร้างแอดมิน
         students_ref.document('admin').set({
             'username': 'admin',
             'name': 'หัวหน้าห้อง',
@@ -54,7 +50,6 @@ def init_firebase():
             'debt': 0,
             'role': 'admin'
         })
-        # สร้างนักเรียนเลขที่ 1-29
         for i in range(1, 30):
             uid = f'user{i}'
             students_ref.document(uid).set({
@@ -90,9 +85,8 @@ def index():
         students = []
         for doc in docs:
             d = doc.to_dict()
-            # แปลง format ให้เข้ากับ HTML (ID, Username, Name, Password, Debt)
             students.append([doc.id, d['username'], d['name'], '', d['debt']])
-        students.sort(key=lambda x: x[1]) # เรียงตามเลขที่
+        students.sort(key=lambda x: x[1])
         return render_template('admin.html', students=students)
     else:
         doc = db.collection('students').document(session['user_id']).get()
@@ -108,7 +102,6 @@ def verify_slip(student_id):
     file.save(temp_path)
 
     try:
-        # --- 1. กันสลิปซ้ำด้วย QR Digital Data ---
         img = cv2.imread(temp_path)
         qr_codes = decode(img)
         if not qr_codes: return jsonify({"status": "error", "message": "ไม่พบ QR Code ในสลิป"})
@@ -119,7 +112,6 @@ def verify_slip(student_id):
         if used_ref.get().exists:
             return jsonify({"status": "error", "message": "❌ สลิปนี้ถูกใช้ไปแล้ว!"})
 
-        # --- 2. อ่านยอดเงินด้วย AI ---
         results = reader.readtext(temp_path, detail=0)
         amount_found = 0
         for i, text in enumerate(results):
@@ -134,7 +126,6 @@ def verify_slip(student_id):
             if amount_found > 0: break
 
         if amount_found > 0:
-            # ใช้ Batch เพื่อให้อัปเดตทั้ง 'ประวัติสลิป' และ 'ยอดหนี้' พร้อมกัน
             batch = db.batch()
             batch.set(used_ref, {'used_at': firestore.SERVER_TIMESTAMP, 'by': student_id})
             student_ref = db.collection('students').document(student_id)
@@ -182,5 +173,5 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    init_firebase() # ตรวจสอบ/สร้างข้อมูลเริ่มต้น
+    init_firebase()
     app.run(debug=True, host='0.0.0.0', port=5000)
