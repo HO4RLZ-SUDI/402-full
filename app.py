@@ -1,32 +1,29 @@
 from flask import Flask, request, abort, send_file
 from linebot import LineBotApi, WebhookHandler
 from linebot.models import *
+
 import firebase_admin
 from firebase_admin import credentials, firestore
+
 from promptpay import qrcode as pp_qrcode
-
-
 import easyocr
 import cv2
 import numpy as np
 import hashlib
-from pyzbar.pyzbar import decode
-
 import qrcode
+
 import os
+import json
 
 # =========================
-# 🔐 CONFIG
+# 🔐 CONFIG (ใช้ ENV)
 # =========================
 
-CHANNEL_ACCESS_TOKEN = "2c01ccicuhDmb2DTG8ZHYcIqNfqNjQbA/MNkBvk3gquOdHiwLDIMrerR9YBgNJScZaT7aFPCbu9LqAKu7LmJLQh0cC0O9kB+2YLxOHzeIN5T4/G+hXON/QZpOPTfFlFobApRyOgU6YzwrvLk2J0W+QdB04t89/1O/w1cDnyilFU="
-CHANNEL_SECRET = "9154168417b2763e858a587a531db8c5"
-FIREBASE_KEY_PATH = "serviceAccount.json"
-
-ADMIN_UID = "U6b0f65a4cea28060111979d38aa8b3ab"
-MY_PROMPTPAY = "0627798207"
-
-NGROK_URL = "https://1d94-184-22-189-34.ngrok-free.app"
+CHANNEL_ACCESS_TOKEN = os.environ.get("LINE_TOKEN")
+CHANNEL_SECRET = os.environ.get("LINE_SECRET")
+ADMIN_UID = os.environ.get("ADMIN_UID")
+MY_PROMPTPAY = os.environ.get("PROMPTPAY")
+BASE_URL = os.environ.get("BASE_URL")  # URL ของ Render
 
 # =========================
 # 🔧 INIT
@@ -37,7 +34,9 @@ app = Flask(__name__)
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-cred = credentials.Certificate(FIREBASE_KEY_PATH)
+# 🔥 Firebase from ENV
+firebase_key = os.environ.get("FIREBASE_KEY")
+cred = credentials.Certificate(json.loads(firebase_key))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -71,12 +70,11 @@ def extract_amount(img_bytes):
 
 def extract_qr(img_bytes):
     img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-    codes = decode(img)
 
-    if codes:
-        return codes[0].data.decode("utf-8")
+    detector = cv2.QRCodeDetector()
+    data, _, _ = detector.detectAndDecode(img)
 
-    return None
+    return data if data else None
 
 
 def get_student(uid):
@@ -88,24 +86,23 @@ def get_student(uid):
 
 def generate_qr(phone, amount):
     payload = pp_qrcode.generate_payload(phone, amount)
-
     img = qrcode.make(payload)
 
-    path = f"qr_{amount}.png"
+    path = f"/tmp/qr_{amount}.png"
     img.save(path)
 
     return path
+
 # =========================
-# 🌐 SERVE QR FILE
+# 🌐 SERVE QR
 # =========================
 
 @app.route("/qr/<filename>")
 def serve_qr(filename):
-    return send_file(filename, mimetype="image/png")
-
+    return send_file(f"/tmp/{filename}", mimetype="image/png")
 
 # =========================
-# 🌐 ADMIN DASHBOARD
+# 🌐 DASHBOARD
 # =========================
 
 @app.route("/")
@@ -166,7 +163,6 @@ def handle_text(event):
     text = event.message.text.strip()
     uid = event.source.user_id
 
-    # 📝 สมัคร
     if text == "ลงทะเบียน":
         reply = "พิมพ์: เลขที่ <เลข> เช่น เลขที่ 7"
 
@@ -182,7 +178,6 @@ def handle_text(event):
 
         reply = f"✅ ลงทะเบียนเลขที่ {num}"
 
-    # 💰 เช็คยอด
     elif text == "เช็คยอด":
         sid, data = get_student(uid)
 
@@ -191,90 +186,30 @@ def handle_text(event):
         else:
             reply = f"💰 ยอดค้าง: {data['debt']} บาท"
 
-    # 💸 จ่ายเงิน → ส่ง QR
     elif text in ["จ่ายเงิน", "วิธีจ่ายเงิน"]:
         sid, data = get_student(uid)
 
         if not data:
             reply = "❌ ลงทะเบียนก่อน"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-            return
+        else:
+            debt = data["debt"]
 
-        debt = data["debt"]
+            if debt <= 0:
+                reply = "✅ ไม่มีหนี้"
+            else:
+                qr_path = generate_qr(MY_PROMPTPAY, debt)
 
-        if debt <= 0:
-            reply = "✅ ไม่มีหนี้"
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-            return
-
-        qr_path = generate_qr(MY_PROMPTPAY, debt)
-
-        line_bot_api.reply_message(
-            event.reply_token,
-            [
-                TextSendMessage(text=f"💸 ยอดค้าง {debt} บาท\nโอนแล้วส่งสลิป"),
-                ImageSendMessage(
-                    original_content_url=f"{NGROK_URL}/qr/{qr_path}",
-                    preview_image_url=f"{NGROK_URL}/qr/{qr_path}"
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    [
+                        TextSendMessage(text=f"💸 ยอดค้าง {debt} บาท\nโอนแล้วส่งสลิป"),
+                        ImageSendMessage(
+                            original_content_url=f"{BASE_URL}/qr/qr_{debt}.png",
+                            preview_image_url=f"{BASE_URL}/qr/qr_{debt}.png"
+                        )
+                    ]
                 )
-            ]
-        )
-        return
-
-    # ======================
-    # 👑 ADMIN COMMANDS
-    # ======================
-
-    elif text.startswith("เพิ่มหนี้"):
-        if uid != ADMIN_UID:
-            reply = "❌ ไม่มีสิทธิ์"
-        else:
-            amount = int(text.split()[1])
-
-            docs = db.collection("students").stream()
-            for d in docs:
-                db.collection("students").document(d.id).update({
-                    "debt": firestore.Increment(amount)
-                })
-
-            reply = f"✅ เพิ่มหนี้ทุกคน +{amount}"
-
-    elif text.startswith("เพิ่ม "):
-        if uid != ADMIN_UID:
-            reply = "❌ ไม่มีสิทธิ์"
-        else:
-            _, sid, amount = text.split()
-
-            db.collection("students").document(sid).update({
-                "debt": firestore.Increment(int(amount))
-            })
-
-            reply = f"✅ เพิ่มหนี้ {sid} +{amount}"
-
-    elif text.startswith("เงินสด"):
-        if uid != ADMIN_UID:
-            reply = "❌ ไม่มีสิทธิ์"
-        else:
-            _, sid, amount = text.split()
-
-            db.collection("students").document(sid).update({
-                "debt": firestore.Increment(-int(amount))
-            })
-
-            reply = f"💵 รับเงินสด {sid} {amount}"
-
-    elif text == "สรุป":
-        if uid != ADMIN_UID:
-            reply = "❌ ไม่มีสิทธิ์"
-        else:
-            docs = db.collection("students").stream()
-
-            msg = "📊 สรุปหนี้\n"
-            for d in docs:
-                data = d.to_dict()
-                msg += f"{d.id}: {data['debt']} บาท\n"
-
-            reply = msg
+                return
 
     else:
         reply = "❓ ไม่เข้าใจคำสั่ง"
@@ -283,7 +218,7 @@ def handle_text(event):
 
 
 # =========================
-# 📸 IMAGE MESSAGE (SLIP)
+# 📸 IMAGE MESSAGE
 # =========================
 
 @handler.add(MessageEvent, message=ImageMessage)
@@ -301,7 +236,6 @@ def handle_image(event):
     content = line_bot_api.get_message_content(event.message.id)
     img_bytes = content.content
 
-    # 🛡️ กันสลิปซ้ำ
     slip_hash = hash_slip(img_bytes)
 
     if slip_hash in data.get("slips", []):
@@ -311,19 +245,15 @@ def handle_image(event):
         )
         return
 
-    # 📷 อ่าน QR (ไม่ตรวจเบอร์แล้ว)
     qr = extract_qr(img_bytes)
-
     if not qr:
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage("❌ ไม่พบ QR ในสลิป")
+            TextSendMessage("❌ ไม่พบ QR")
         )
         return
 
-    # 💰 อ่านยอดเงิน
     amount = extract_amount(img_bytes)
-
     if not amount:
         line_bot_api.reply_message(
             event.reply_token,
@@ -338,16 +268,16 @@ def handle_image(event):
         "slips": firestore.ArrayUnion([slip_hash])
     })
 
-    reply = f"✅ ชำระ {amount} บาท\nคงเหลือ {new_debt} บาท"
-
     line_bot_api.reply_message(
         event.reply_token,
-        TextSendMessage(text=reply)
+        TextSendMessage(f"✅ ชำระ {amount} บาท\nคงเหลือ {new_debt} บาท")
     )
 
+
 # =========================
-# 🚀 RUN
+# 🚀 RUN (Render)
 # =========================
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)

@@ -8,5 +8,4 @@ opencv-python-headless
 numpy
 qrcode
 promptpay
-pyzbar
 Pillow
