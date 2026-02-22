@@ -77,7 +77,7 @@ shapely==2.1.2
 six==1.17.0
 sympy==1.14.0
 tifffile==2026.2.20
-torch==2.10.0+cpu
+torch
 torchvision==0.25.0+cpu
 typing-inspection==0.4.2
 typing_extensions==4.15.0
