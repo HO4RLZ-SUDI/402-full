@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - ม.4/2</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+        body { background-color: #f4f7f6; }
+        .navbar { background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .stat-card { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border-left: 5px solid #764ba2; }
+        .student-item { background: white; border-radius: 12px; margin-bottom: 10px; padding: 15px; border: none; transition: 0.2s; }
+        .student-item:hover { transform: scale(1.01); box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+        .debt-text { font-size: 1.1rem; font-weight: bold; color: #dc3545; }
+        .btn-action { border-radius: 8px; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg mb-4">
+        <div class="container">
+            <span class="navbar-brand fw-bold text-primary">ม.4/2 ADMIN</span>
+            <a href="/logout" class="btn btn-outline-danger btn-sm">ออกจากระบบ</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="stat-card d-flex justify-content-between align-items-center">
+                    <div>
+                        <h6 class="text-muted mb-1">จัดการหนี้รายวัน</h6>
+                        <h4 class="mb-0 fw-bold">เก็บเงิน 10 บาท/วัน</h4>
+                    </div>
+                    <a href="/add_daily_debt" class="btn btn-warning btn-action shadow-sm" onclick="return confirm('บวกหนี้ทุกคน 10 บาท?')">☀️ เริ่มวันใหม่</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            {% for s in students %}
+            <div class="col-md-6 col-lg-4">
+                <div class="student-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="fw-bold">{{ s[2] }}</div>
+                        <div class="debt-text">{{ s[4] }} ฿</div>
+                    </div>
+                    <div>
+                        <a href="/pay_cash/{{ s[0] }}" class="btn btn-success btn-sm btn-action">💵 จ่ายสด</a>
+                        <button class="btn btn-primary btn-sm btn-action" onclick="alert('ให้เพื่อน Login เข้ามาสแกนเองเพื่อความปลอดภัย')">📱 QR</button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</body>
+</html>
